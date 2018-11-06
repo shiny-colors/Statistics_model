@@ -3,6 +3,7 @@ library(MASS)
 library(flexmix)
 library(reshape2)
 library(plyr)
+library(dplyr)
 library(lattice)
 library(ggplot2)
 
