@@ -15,7 +15,7 @@ library(ggplot2)
 #set.seed(58904)
 ##データの設定
 k <- 5   #ブランド数
-hh <- 1000   #家計数 
+hh <- 5000   #家計数 
 pt <- rtpois(hh, rgamma(hh, 10, 0.5), a=0, b=Inf)   #期間中の購買数
 hhpt <- sum(pt)   #総購買数
 
@@ -123,6 +123,7 @@ for(i in 1:hh){
 
 #リストを変換
 Data <- do.call(rbind, DT_list)
+column <- ncol(Data)
 colMeans(BUY)
 
 
@@ -154,10 +155,12 @@ for(lam in 1:length(lambda_vec)){
 }  
 
 ##ネステッドロジットモデルの対数尤度の定義
-fr <- function(theta, rho1, rho2, BUY, Data, ROYl, clust, clust1, clust2, rho_flag, vec1, vec2, k){
+fr <- function(theta, BUY, Data, ROYl, clust, clust1, clust2, rho_flag, vec1, vec2, k){
   
   #パラメータの抽出
   beta <- theta[index_beta]
+  rho1 <- theta[index_rho1]
+  rho2 <- theta[index_rho2]
   
   #相関パラメータの設定
   rho_vec <- matrix(1, nrow=clust, ncol=k)
@@ -188,74 +191,16 @@ fr <- function(theta, rho1, rho2, BUY, Data, ROYl, clust, clust1, clust2, rho_fl
   return(LL)
 }
 
-##ネステッドロジットモデルの対数尤度の定義
-dll <- function(theta, rho1, rho2, BUY, Data, ROYl, clust, clust1, clust2, rho_flag, vec1, vec2, k){
-  
-  #パラメータの抽出
-  beta <- theta[index_beta]
-  
-  #相関パラメータの設定
-  clust_index <- c(clust1/clust1, clust2/clust2*2)
-  rho_vec <- matrix(1, nrow=clust, ncol=k)
-  rho_vec[1, clust1] <- rho1; rho_vec[2, clust2] <- rho2
-  rho_dt1 <- matrix(cbind(rho1, rho2), nrow=hhpt, ncol=2, byrow=T)
-  rho_dt2 <- matrix(c(rho_vec[1, clust1], rho_vec[2, clust2]), nrow=hhpt, ncol=k, byrow=T)
-  
-  ##効用と選択確率を定義
-  #効用の定義
-  Data[, ncol(Data)] <- as.numeric(t(ROYl[[6]]))
-  U <- matrix(as.numeric(Data %*% beta), nrow=hhpt, ncol=k, byrow=T)
-  
-  #ログサム変数の定義
-  rho_exp1 <- as.numeric((rho_flag[vec1, ] * exp(U/rho_vec[vec1, ])) %*% rep(1, k))
-  rho_exp2 <- as.numeric((rho_flag[vec2, ] * exp(U/rho_vec[vec2, ])) %*% rep(1, k))
-  rho_exp <- cbind(rho_exp1, rho_exp2)
-  logsum1 <-  log(rho_exp1)   #クラスター1のログサム変数
-  logsum2 <- log(rho_exp2)   #クラスター2のログサム変数
-  logsum <- cbind(logsum1, logsum2)
-  
-  #クラスターごとの選択確率
-  logsum_exp1 <- exp(rho1*logsum1); logsum_exp2 <- exp(rho2*logsum2)
-  logsum_exp <- cbind(logsum_exp1, logsum_exp2)
-  
-  #ブランドごとの選択確率
-  u_exp1 <- exp(U[, clust1] / rho1); u_exp2 <- exp(U[, clust2] / rho2)
-  u_exp <- cbind(u_exp1, u_exp2)[, c(clust1, clust2)]
-  
-  exp(rho1 * log(exp(U/rho1)))/(exp(rho1 * log(exp(U/rho1))) + exp(rho2 * log(exp(U/rho2))))
-
-  exp(rho1 * log(exp(U/rho1))) * 
-    (exp(rho1 * log(exp(U/rho1))) * (rho1 * (exp(U/rho1) * (1/rho1)/exp(U/rho1))) + 
-  exp(rho2 * log(exp(U/rho2))) * 
-    (rho2 * (exp(U/rho2) * (1/rho2)/exp(U/rho2))))
-  
-  
-  LLd <- colSums2(as.numeric(t((((logsum_exp[, clust_index] * (rho_dt2 * (u_exp * (1/rho_dt2)/u_exp)) / rowSums2(logsum_exp) -
-                                    logsum_exp * rowSums2(logsum_exp * rho_dt1 * rho_exp * (1/rho_dt1)/rho_exp) /
-                                    rowSums2(logsum_exp)^2) * rho_exp +
-                                   logsum_exp / rowSums2(logsum_exp) * rho_exp * 1/rho_dt1) / rowSums2(rho_exp))[, clust_index] -
-                                 (logsum_exp / rowSums(logsum_exp))[, clust_index] * u_exp * rowSums2(u_exp * rho_dt2) / 
-                                 rowSums(u_exp)^2)) * Data)
-  
-  
-  LLd <- colSums2(as.numeric(t((((logsum_exp * (rho_dt1 * (rho_exp * (1/rho_dt1)/rho_exp)) / rowSums2(logsum_exp) -
-                                    logsum_exp * rowSums2(logsum_exp * rho_dt1 * rho_exp * (1/rho_dt1)/rho_exp) /
-                                    rowSums2(logsum_exp)^2) * rho_exp +
-                                   logsum_exp / rowSums2(logsum_exp) * rho_exp * 1/rho_dt1) / rowSums2(rho_exp))[, clust_index] -
-                                 (logsum_exp / rowSums(logsum_exp))[, clust_index] * u_exp * rowSums2(u_exp * rho_dt2) / 
-                                 rowSums(u_exp)^2)) * Data)
-  return(LLd)
-}
 
 ##ブランドロイヤルティのパラメータを動かしながら対数尤度を最大化
 #初期値とデータの設定
-b0 <- c(rep(0, ncol(Data)))   #パラメータの初期値
-theta <- matrix(0, nrow=length(lambda_vec), ncol=length(theta))
+b0 <- c(rep(0, column), 1.0, 1.0)   #パラメータの初期値
+theta <- matrix(0, nrow=length(lambda_vec), ncol=length(b0))
 vec1 <- rep(1, hhpt)
 vec2 <- rep(2, hhpt)
-res <- optim(b0, fr, gr=dll, rho1, rho2, BUY, Data, ROYl[[6]], clust, clust1, clust2, rho_flag, vec1, vec2, k, 
+res <- optim(b0, fr, gr=NULL, BUY, Data, ROYl[[1]], clust, clust1, clust2, rho_flag, vec1, vec2, k, 
              method="BFGS", hessian=FALSE, control=list(fnscale=-1, trace=TRUE))
-
+b0 <- res$par
 
 #準ニュートン法とグリットサーチでパラメータを推定
 res <- list()
