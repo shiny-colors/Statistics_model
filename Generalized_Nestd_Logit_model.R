@@ -1,108 +1,104 @@
 #####generalized nested logit model#####
 library(MASS)
 library(mlogit)
-library(nnet)
-library(flexmix)
-library(caret)
+library(matrixStats)
+library(Matrix)
+library(mvtnorm)
+library(extraDistr)
 library(reshape2)
 library(dplyr)
+library(plyr)
 library(ggplot2)
-library(lattice)
 
-####データの発生####
 #set.seed(8437)
 
-####データの設定####
+####データの発生####
+##データの設定
 g <- 3   #ネスト数
-g.par <- 9   #ネストの総パラメータ数
-hh <- 2000   #サンプル数
-pt <- rpois(hh, 5); pt <- ifelse(pt==0, 1, pt)   #購買機会(購買機会数が0なら1に置き換え)
-hhpt <- sum(pt)
+g_par <- 9   #ネストの総パラメータ数
+hh <- 5000   #ユーザー数
+pt <- rtpois(hh, rgamma(hh, 7.5, 0.3), a=0, b=Inf)   #購買機会数
+hhpt <- sum(pt)   #総レコード数
 member <- 9   #選択可能メンバー数
 k <- 5   #説明変数の数
 
-##IDの設定
-id <- rep(1:hh, pt)
-t <- c()
-for(i in 1:hh){
-  t <- c(t, 1:pt[i])
-}
+##IDとインデックスの設定
+#IDの設定
+u_id <- rep(1:hh, pt)
+t_id <- as.numeric(unlist(tapply(1:hhpt, u_id, rank)))
 
-#IDとセグメントを結合
-ID <- data.frame(no=1:hhpt, id=id, t=t)   #データの結合
+#インデックスの設定
+user_list <- list()
+for(i in 1:hh){
+  user_list[[i]] <- which(u_id==i)
+}
 
 
 ####説明変数の発生####
-#衣装の設定
-c.num <- member
-CLOTH <- list()
-for(i in 1:member){
-  CLOTH[[i]] <- t(rmultinom(hhpt, 1, runif(c.num)))
-  CLOTH[[i]] <- CLOTH[[i]][, -c.num]
-}
+##切片の設定
+intercept <- matrix(c(1, rep(0, member-1)), nrow=hhpt*member, ncol=member-1, byrow=T)
 
-#レベルの対数
-lv.weib <- round(rweibull(hh*2, 1.8, 280), 0)
-index.lv <- sample(subset(1:length(lv.weib), lv.weib > 80), hh)
-lv <- scale(lv.weib[index.lv])
+#衣装の設定
+#多項分布からデータを生成
+c_num <- member
+Cloth_list <- list()
+for(i in 1:member){
+  prob <- as.numeric(extraDistr::rdirichlet(1, rep(1.0, c_num)))
+  Cloth_list[[i]] <- rmnom(hhpt, 1, prob)[, -c_num]
+}
+Cloth <- do.call(rbind, Cloth_list)
+
+##レベルの設定
+#ワイブル分布からデータを生成
+limit_Lv <- 80
+Lv_weib <- round(rweibull(hh*member, 1.8, 280), 0)
+Lv_vec <- as.numeric(scale(sample(Lv_weib[Lv_weib > limit_Lv], hh)))
 
 #パネルに変更
-LV <- c()
+Lv_list <- list()
 for(i in 1:hh){
-  LV <- c(LV, rep(lv[i], pt[i]))
+  Lv_list[[i]] <- diag(Lv_vec[i], member)[rep(1:member, pt[i]), -member]
 }
+Lv <- do.call(rbind, Lv_list)
 
-#スコアの対数
-score.norm <- exp(rnorm(hhpt*2, 12.5, 0.5))
-index.score <- sample(subset(1:length(score.norm), score.norm > 150000), hhpt)
-score <- scale(score.norm[index.score])
-SCORE <- score
 
-#どのメンバーの勧誘回だったか
-prob <- 1/(member)
-scout <- t(rmultinom(hhpt, 2, rep(prob, member)))
+##スコアの対数の設定
+#正規分布からデータを生成
+Score_norm <- exp(rnorm(hhpt*member, 12.5, 0.5))
+Score_vec <- as.numeric(scale(sample(Score_norm[Score_norm > 150000], hhpt)))
+
+#パネルに変更
+Score_list <- list()
+for(i in 1:hhpt){
+  Score_list[[i]] <- diag(Score_vec[i], member)[, -member]
+}
+Score <- do.call(rbind, Score_list)
+
+##どのメンバーの勧誘回だったか
+#多項分布からメンバーの勧誘を生成
+prob <- rep(1/member, member)
+scout <- rmnom(hhpt, 2, prob)
 
 #メンバーで勧誘が重複しなくなるまで乱数を発生させ続ける
-for(i in 1:10000){
-  if(max(scout)==1) break
-  index.scout <- subset(1:nrow(scout), apply(scout, 1, max) > 1)
-  scout[index.scout, ] <- t(rmultinom(length(index.scout), 2, rep(prob, member)))
-  print(i)
-}
-SCOUT <- scout
-
-
-##説明変数をベクトル形式に変換
-#切片の設定
-p <- c(1, rep(0, member))
-Pop <- matrix(p, nrow=hhpt*length(p), ncol=member, byrow=T)
-Pop <- subset(Pop, rowSums(Pop) > 0)[, -member]
-
-#多項型説明変数をベクトル形式に変更
-LV.v <- matrix(0, nrow=hhpt*member, ncol=member-1)
-SCORE.v <- matrix(0, nrow=hhpt*member, ncol=member-1)
-
-for(i in 1:hhpt){
-  index.v <- ((i-1)*member+1):((i-1)*member+member)
-  LV.v[index.v, ] <- diag(LV[i], member)[, -member]
-  SCORE.v[index.v, ] <- diag(SCORE[i], member)[, -member]
-}
-
-#条件付き説明変数をベクトル形式に変更
-CLOTH.v <- matrix(0, nrow=hhpt*member, ncol=c.num-1)
-for(i in 1:hhpt){
-  print(i)
-  for(j in 1:member){
-    index.v <- (i-1)*member+j
-    CLOTH.v[index.v, ] <- CLOTH[[j]][i, ]
+rp <- 0
+repeat {
+  rp <- rp + 1
+  print(rp)
+  if(max(scout)==1){
+    break
   }
+  index_scout <- which(rowMaxs(scout) > 1)
+  scout[index_scout, ] <- rmnom(length(index_scout), 2, prob)
 }
+Scout <- as.numeric(t(scout))
 
-SCOUT.v <- as.numeric(t(SCOUT))
 
-#データを結合
-X <- data.frame(pop=Pop, lv=LV.v, score=SCORE.v, cloth=CLOTH.v, scout=SCOUT.v)
-XM <- as.matrix(X)
+##データを結合
+Data1 <- as.matrix(data.frame(intercept=1, Lv=Lv_vec[u_id], Score=Score_vec))
+Data2 <- as.matrix(data.frame(Cloth=Cloth, Scout=Scout))
+Data <- as.matrix(data.frame(intercept=intercept, Lv=Lv, Score=Score, Cloth=Cloth, Scout=Scout))
+sparse_data <- as(Data, "CsparseMatrix")
+k <- ncol(Data)
 
 
 ####GNLモデルに基づき応答変数を発生####
@@ -125,47 +121,51 @@ pure <- c(0, 0, 1, 0, 1, 0, 1, 0, 0)
 cool <- c(1, 0, 0, 1, 0, 0, 0, 1, 0)
 
 #ネストを結合
+index_nest <- c(rep(1, 3), rep(2, 3), rep(3, 3))   #各ネストの割当数
 nest <- rbind(first, second, third, Prim, BiBi, LW, smile, pure, cool)
 
 
 ##パラメータを設定
 #回帰パラメータの設定
-b0 <- c(1.3, -0.2, -0.5, 0.4, -0.8, 0.8, 1.1, 0.1)
-b1 <- runif((member-1)*2, 0, 0.2)
-b2 <- runif(NCOL(CLOTH.v), -1.0, 1.4)
-b3 <- runif(NCOL(SCOUT.v), 0.7, 1.0)
-b <- c(b0, b1, b2, b3)
-beta.t <- b
-
+beta0 <- c(1.6, -0.4, -0.6, 0.7, -1.2, 0.8, 1.2, 0.2)
+beta1 <- runif(member-1, 0, 0.3)
+beta2 <- runif(member-1, 0, 0.3)
+beta3 <- rnorm(c_num-1, 0, 1.25)
+beta4 <- 1.75
+betat <- beta <- c(beta0, beta1, beta2, beta3, beta4)
 
 #ログサム変数のパラメータ
-grade <- runif(g, 0.1, 0.9)
-unit <- runif(g, 0.7, 1.0)
-type <- runif(g, 0.1, 0.9)
-logsum.par <- c(grade, unit, type)
+grade <- runif(g, 0.1, 0.8)
+unit <- runif(g, 0.1, 0.85)
+type <- runif(g, 0.15, 0.8)
+rhot <- rho <- c(grade, unit, type)
+h <- c(length(grade), length(unit), length(type))
 
 #アロケーションパラメータの設定
-gamma.k1 <- rep(1.5, member)
-gamma.k2 <- rep(0.5, member)
-gamma.k3 <- rep(1, member)
-gamma.vec <- rbind(gamma.k1, gamma.k2, gamma.k3)
+gamma_k1 <- rep(1.5, member)
+gamma_k2 <- rep(0.5, member)
+gamma_k3 <- rep(1, member)
+gamma_vec <- rbind(gamma_k1, gamma_k2, gamma_k3)
+gammat <- unique(c(gamma_k1, gamma_k2, gamma_k3))
 
 #アロケーションパラメータを正規化
-gamma.par <- gamma.vec / matrix(colSums(gamma.vec), nrow=g, ncol=member, byrow=T)
-gamma <- matrix(0, nrow=nrow(nest), ncol=3)
-
+gamma_par <- gamma_vec / matrix(colSums(gamma_vec), nrow=g, ncol=member, byrow=T)
+gamma <- matrix(0, nrow=nrow(nest), ncol=g)
 
 for(i in 1:g){
-  for(j in 1:3){
-    r <- (i-1)*3+j
-    gamma[r, ] <- (gamma.par[i, ]*nest[r, ])[nest[r, ]==1]
+  for(j in 1:h[i]){
+    r <- (i-1)*h[i]+j
+    gamma[r, ] <- (gamma_par[i, ]*nest[r, ])[nest[r, ]==1]
   }
 }
+thetat <- c(betat, rhot, gammat)   #パラメータの真値
+
 
 ##GNLモデルに基づき確率を計算
 #ロジットを計算
-logit <- matrix(XM %*% b, nrow=hhpt, ncol=member, byrow=T)
-Pr.mnl <- exp(logit)/rowSums(exp(logit))   #多項ロジットモデルの確率
+logit <- matrix(Data %*% beta, nrow=hhpt, ncol=member, byrow=T)
+Prob_mnl <- exp(logit) / rowSums(exp(logit))   #多項ロジットモデルの確率
+
 
 ##ネストの所属確率を計算
 #ネストごとにログサム変数を計算
@@ -175,171 +175,126 @@ d2_1 <- array(0, dim=c(hhpt, member, nrow(nest)))
 
 for(i in 1:nrow(nest)){
   #ネスト、ログサム、アロケーションパラメータをメンバーで行列に変更
-  nest.k <- matrix(nest[i, ], nrow=hhpt, ncol=member, byrow=T)
-  gamma.k <- matrix(gamma[i, ], nrow=hhpt, ncol=g, byrow=T)
-
+  nest_k <- matrix(nest[i, ], nrow=hhpt, ncol=member, byrow=T)
+  gamma_k <- matrix(gamma[i, ], nrow=hhpt, ncol=g, byrow=T)
+  
   #ログサム変数を計算
-  logsum[, i] <- logsum.par[i] * log(rowSums((gamma.k * exp((logit*nest.k)[, nest[i, ]==1]))^(1/logsum.par[i])))
-  d2_2[, i] <- rowSums((gamma.k * exp((logit*nest.k)[, nest[i, ]==1]))^(1/logsum.par[i]))
-  d2_1[, nest[i, ]==1, i] <- (gamma.k * exp((logit*nest.k)[, nest[i, ]==1]))^(1/logsum.par[i])
+  logsum[, i] <- rho[i] * log(rowSums((gamma_k * exp((logit*nest_k)[, nest[i, ]==1]))^(1/rho[i])))
+  d2_2[, i] <- rowSums((gamma_k * exp((logit*nest_k)[, nest[i, ]==1]))^(1/rho[i]))
+  d2_1[, nest[i, ]==1, i] <- (gamma_k * exp((logit*nest_k)[, nest[i, ]==1]))^(1/rho[i])
 }
 
 #ネストjの選択確率のパラメータを計算
-U1_1 <- exp(logsum)
-U1_2 <- matrix(rowSums(exp(logsum)), nrow=hhpt, ncol=nrow(nest))
-Pr1 <- U1_1 / U1_2
+U11 <- exp(logsum)
+U12 <- matrix(rowSums(exp(logsum)), nrow=hhpt, ncol=nrow(nest))
+Prob1 <- U11 / U12
 
 #ネストで条件付けたメンバーごとの選択確率を計算
-Pr2.array <- array(0, dim=c(hhpt, member, nrow(nest)))
-
+Prob2_array <- array(0, dim=c(hhpt, member, nrow(nest)))
 for(i in 1:nrow(nest)){
-  Pr2.array[, nest[i, ]==1, i] <- d2_1[, nest[i, ]==1, i] / matrix(d2_2[, i], nrow=hhpt, ncol=sum(nest[i, ]))
+  Prob2_array[, nest[i, ]==1, i] <- d2_1[, nest[i, ]==1, i] / matrix(d2_2[, i], nrow=hhpt, ncol=sum(nest[i, ]))
 }
 
 #最終的なメンバーの選択確率
-Pr <- matrix(0, nrow=hhpt, ncol=member)
+Prob <- matrix(0, nrow=hhpt, ncol=member)
 for(i in 1:member){
-  Pr[, i] <- rowSums(Pr2.array[, i, nest[, i]==1] * Pr1[, nest[, i]==1])
+  Prob[, i] <- rowSums(Prob2_array[, i, nest[, i]==1] * Prob1[, nest[, i]==1])
 }
 
-#データの確認
-round(data.frame(GNL=Pr, MNL=Pr.mnl), 2)
-summary(Pr)
-summary(Pr.mnl)
-Pr.GNL <- Pr
+#多項分布から応答変数を発生
+y <- rmnom(hhpt, 1, Prob)
+y_vec <- as.numeric(t(y))
 
-##発生させた確率から応答変数を発生
-Y <- t(apply(Pr, 1, function(x) rmultinom(1, 1, x)))
-colSums(Y); round(colMeans(Y), 3)
+
+#データの確認
+round(data.frame(GNL=Prob, MNL=Prob_mnl), 2)
+round(data.frame(GNL=rowMaxs(Prob), MNL=rowMaxs(Prob_mnl)), 3)
+summary(Prob)
+colSums(y)
 
 
 ####Generalized Nested logitモデルを推定####
-####Generalized Nested logitモデルを推定するための関数####
-##Nested logitモデルの対数尤度
-NL.LL <- function(x, Y, X, nest, hhpt, member){
+##多項ロジットモデルの対数尤度関数
+loglike_mnl <- function(beta, y, Data, hhpt, member, k){
+  #効用関数の設定
+  U <- matrix(Data %*% beta, nrow=hhpt, ncol=member, byrow=T)
   
-  #パラメータの設定
-  beta <- x[1:ncol(X)]
-  rho <- x[(ncol(X)+1):(ncol(X)+nrow(nest))]
-  
-  #ロジットの計算
-  logit <- matrix(X %*% beta, nrow=hhpt, ncol=member, byrow=T)
-  
-  #ログサム変数の定義
-  U1 <- matrix(0, nrow=hhpt, ncol=member)
-  logsum <- matrix(0, nrow=hhpt, ncol=nrow(nest))
-  
-  for(i in 1:nrow(nest)){
-    U1[, nest[i, ]==1] <- exp(logit[, nest[i, ]==1] / rho[i])
-    logsum[, i] <- log(rowSums(U1[, nest[i, ]==1]))
-  }
-  
-  #クラスターの選択確率
-  d1 <- logsum * matrix(rho, nrow=hhpt, ncol=nrow(nest), byrow=T)
-  CL <- exp(d1) / matrix(rowSums(exp(d1)), nrow=hhpt, ncol=nrow(nest))
-  
-  #選択確率の計算
-  rv <- rho * nest
-  rho.v <- rv[rv > 0]
-  Pr1 <- matrix(0, nrow=hhpt, ncol=member)
-  Pr2 <- matrix(0, nrow=hhpt, ncol=member)
-  
-  #効用関数の計算
-  U2 <- logit / matrix(rho.v, nrow=hhpt, ncol=member, byrow=T)
-  
-  #ネストごとにメンバーの選択確率を計算
-  for(i in 1:nrow(nest)){
-   d2  <- exp(U2[, nest[i, ]==1])
-   Pr2[, nest[i, ]==1] <- d2 / matrix(rowSums(d2), nrow=hhpt, ncol=sum(nest[i, ]))
-   
-   #ネストの選択確率をメンバーの列に合わせる
-   Pr1[, nest[i, ]==1] <- CL[, i]
-  }
-  
-  #同時確率と対数尤度の計算
-  Pr <- Pr1 * Pr2   #同時確率
-  LLi <- rowSums(Y * log(Pr))   #対数尤度
+  #対数尤度の計算
+  d <- rowSums(exp(U))
+  LLi <- rowSums(y * U) - log(d)
   LL <- sum(LLi)
   return(LL)
 }
 
-##多項ロジットモデルの対数尤度関数
-LL_logit <- function(x, X, Y, hh, k){
-  #パラメータの設定
-  theta <- x
+##多項ロジットモデルの対数尤度の微分関数
+dloglike_mnl <- function(beta, y, Data, hhpt, member, k){
   
-  #効用関数の設定
-  U <- matrix(X %*% theta, nrow=hh, ncol=k, byrow=T)
+  #ロジットと確率を計算
+  U <- matrix(Data %*% beta, nrow=hhpt, ncol=member, byrow=T)
+  exp_U <- exp(U)
+  Pr <- exp_U / rowSums(exp_U)
   
-  #対数尤度の計算
-  d <- rowSums(exp(U))
-  LLl <- rowSums(Y * U) - log(d)
-  LL <- sum(LLl)
-  return(LL)
+  #ロジットモデルの対数微分関数を定義
+  Pr_vec <- as.numeric(t(Pr))
+  y_vec <- as.numeric(t(y))
+  
+  dlogit <- (y_vec - Pr_vec) * Data
+  LLd <- colSums(dlogit)
+  return(LLd)
 }
 
-
 ##Generalized Nested logitモデルの対数尤度関数
-GNL.LL <- function(b, Y, X, nest, hhpt, g.par, g, member, l){
+loglike <- function(theta, y, Data, sparse_data, nest, hhpt, g, member, index_theta){
   
-  #パラメータの設定
-  beta <- b[l[1]:l[2]]
-  rho <- abs(b[l[3]:l[4]])
-  gamma.v <- b[l[5]:l[6]]
-
+  ##パラメータの設定
+  #推定するパラメータの設定
+  beta <- theta[index_theta$beta]
+  rho <- abs(theta[index_theta$rho])
+  gamma <- c(theta[index_theta$gamma], 1) 
+  
   #アロケーションパラメータを正規化
-  gamma.obs <- c(gamma.v, 1) / sum(c(gamma.v, 1))
-  gamma.par <- matrix(gamma.obs, nrow=g, ncol=member)
-  gamma <- matrix(0, nrow=g.par, ncol=3)
+  gamma_vec <- matrix(gamma / sum(gamma), nrow=g, ncol=member)
+  gamma_par <- gamma_vec / matrix(colSums(gamma_vec), nrow=g, ncol=member, byrow=T)
+  gamma <- gamma_par[index_nest, ]*nest
   
-  for(i in 1:g){
-    for(j in 1:3){
-      r <- (i-1)*3+j
-      gamma[r, ] <- (gamma.par[i, ]*nest[r, ])[nest[r, ]==1]
-    }
-  }
+  ##GNLモデルに基づき所属確率を計算
+  #ロジットを設定
+  logit <- matrix(sparse_data %*% beta, nrow=hhpt, ncol=member, byrow=T)
   
-  ##GNLモデルに基づき確率を計算
-  #ロジットを計算
-  logit <- matrix(X %*% beta, nrow=hhpt, ncol=member, byrow=T)
+  #データの変換
+  inv_rho <- 1/rho
+  expl <- exp(logit)
   
-  ##ネストの所属確率を計算
   #ネストごとにログサム変数を計算
+  d21 <- array(0, dim=c(hhpt, member, nrow(nest)))
+  d22 <- matrix(0, nrow=hhpt, ncol=nrow(nest))
   logsum <- matrix(0, nrow=hhpt, ncol=nrow(nest)) 
-  d2_2 <- matrix(0, nrow=hhpt, ncol=nrow(nest))
-  d2_1 <- array(0, dim=c(hhpt, member, nrow(nest)))
   
-  for(i in 1:nrow(nest)){
-    #ネスト、ログサム、アロケーションパラメータをメンバーで行列に変更
-    nest.k <- matrix(nest[i, ], nrow=hhpt, ncol=member, byrow=T)
-    gamma.k <- matrix(gamma[i, ], nrow=hhpt, ncol=g, byrow=T)
-    
-    #ログサム変数を計算
-    logsum[, i] <- rho[i] * log(rowSums((gamma.k * exp((logit*nest.k)[, nest[i, ]==1]))^(1/rho[i])))
-    d2_2[, i] <- rowSums((gamma.k * exp((logit*nest.k)[, nest[i, ]==1]))^(1/rho[i]))
-    d2_1[, nest[i, ]==1, i] <- (gamma.k * exp((logit*nest.k)[, nest[i, ]==1]))^(1/rho[i])
+  for(j in 1:nrow(nest)){
+    d21[, , j] <- expl^inv_rho[j] * matrix(gamma[j, ]^inv_rho[j], nrow=hhpt, ncol=member, byrow=T)
+    d22[, j] <- as.numeric(d21[, , j] %*% rep(1, member))
+    logsum[, j] <- rho[j] * log(d22[, j])
   }
   
   #ネストjの選択確率のパラメータを計算
-  U1_1 <- exp(logsum)
-  U1_2 <- matrix(rowSums(exp(logsum)), nrow=hhpt, ncol=nrow(nest))
-  Pr1 <- U1_1 / U1_2
+  U11 <- exp(logsum)
+  U12 <- matrix(rowSums(U11), nrow=hhpt, ncol=nrow(nest))
+  Pr1 <- U11 / U12
   
   #ネストで条件付けたメンバーごとの選択確率を計算
-  Pr2.array <- array(0, dim=c(hhpt, member, nrow(nest)))
-  
-  for(i in 1:nrow(nest)){
-    Pr2.array[, nest[i, ]==1, i] <- d2_1[, nest[i, ]==1, i] / matrix(d2_2[, i], nrow=hhpt, ncol=sum(nest[i, ]))
+  Pr2_array <- array(0, dim=c(hhpt, member, nrow(nest)))
+  for(j in 1:nrow(nest)){
+    Pr2_array[, , j] <- d21[, , j] / d22[, j]
   }
   
   #最終的なメンバーの選択確率
   Pr <- matrix(0, nrow=hhpt, ncol=member)
-  for(i in 1:member){
-    Pr[, i] <- rowSums(Pr2.array[, i, nest[, i]==1] * Pr1[, nest[, i]==1])
+  for(j in 1:member){
+    Pr[, j] <- rowSums(Pr2_array[, j, ] * Pr1)
   }
   
-  #対数尤度を計算
-  LLi <- rowSums(Y * log(Pr))
+  ##対数尤度の和
+  LLi <- rowSums(y * log(Pr))
   LL <- sum(LLi)
   return(LL)
 }
@@ -348,46 +303,35 @@ GNL.LL <- function(b, Y, X, nest, hhpt, g.par, g, member, l){
 ####GMLモデルを最尤推定####
 ##GMLモデルの初期値を決定
 #多項ロジットモデルでパラメータの初期値を決定
-x <- runif(ncol(XM), -0.5, 1)
-ML.res <- optim(x, LL_logit, gr=NULL, Y=Y, X=XM, hh=hhpt, k=member,
-                method="BFGS", hessian=FALSE, control=list(fnscale=-1))
-
+beta <- rep(0, k)
+res_mnl <- optim(beta, loglike_mnl, gr=dloglike_mnl, y, Data, hhpt, member, k,
+                 method="BFGS", hessian=FALSE, control=list(fnscale=-1, trace=TRUE))
+b <- res_mnl$par
 
 ##GMLモデルを準ニュートン法で最尤推定
-#パラメータのインデックスを作成
-l <- c(1, ncol(X), ncol(X)+1, ncol(X)+length(logsum.par), ncol(X)+length(logsum.par)+1, ncol(X)+length(logsum.par)+2)
+#パラメータの初期値を設定
+theta <- c(b, rep(0.75, nrow(nest)), rep(1.0, g-1))
+index_theta <- list(beta=1:k, rho=(k+1):(k+nrow(nest)), gamma=(k+nrow(nest)+1):length(theta))
 
-#パラメータの制約条件
-upper <- c(rep(Inf, ncol(XM)), rep(1, length(logsum.par)), Inf, Inf)   #上限
-lower <- c(rep(-Inf, ncol(XM)), rep(0, length(logsum.par)), -Inf, -Inf)   #下限
-
-#制約付きの準ニュートン法でパラメータを推定
-res <- list()
-
-for(i in 1:1000){
-  b <- c(ML.res$par, runif(g.par, 0.4, 0.7), 1.2, 0.7)
-  res <- try(optim(b, GNL.LL, gr=NULL, Y=Y, X=XM, nest=nest, hhpt=hhpt, g.par=g.par, g=g, member=member, l=l,
-                   method="L-BFGS-B", hessian=TRUE, lower=lower, upper=upper, 
-                   control=list(fnscale=-1, maxit=200, trace=TRUE)), silent=FALSE)
-  if(class(res) == "try-error") {next} else {break}   #エラー処理
-}
+#準ニュートン法でパラメータを推定
+res <- optim(theta, loglike, gr=NULL, y, Data, sparse_data, nest, hhpt, g, member, index_theta,
+             method="BFGS", hessian=TRUE, control=list(fnscale=-1, trace=TRUE))
 
 
 ####推定されたパラメータの確認と適合度####
 ##真のパラメータと推定されたパラメータの比較
-b <- res$par
-round(rbind(beta=res$par, beta.t=c(beta.t, logsum.par, gamma.k1[1], gamma.k2[2])), 2)
+theta <- res$par
+LL <- res$value
+round(cbind(theta=c(theta, 1), thetat), 3)
 
 ##相関係数の計算
 
 
 ##適合度の比較
-c(res$value, ML.res$value)   #対数尤度
-round(tval <- res$par/sqrt(-diag(solve(res$hessian))), 3)   #t値
-round(AIC <- -2*res$value + 2*length(res$par), 3)   #GNLモデルのAIC
-round(-2*ML.res$value + 2*length(ML.res$par), 3)   #MNLモデルのAIC
-round(AIC <- -2*res$value + log(hhpt)*length(res$par), 3)   #GNLモデルのBIC
-round(-2*ML.res$value + log(hhpt)*length(ML.res$par), 3)   #MNLモデルのBIC
-
-
+c(LL, res_mnl$value)   #対数尤度
+round(tval <- theta/sqrt(-diag(solve(res$hessian))), 3)   #t値
+round(AIC <- -2*LL + 2*length(res$par), 3)   #GNLモデルのAIC
+round(-2*res_mnl$value + 2*length(res_mnl$par), 3)   #MNLモデルのAIC
+round(BIC <- -2*LL + log(hhpt)*length(res$par), 3)   #GNLモデルのBIC
+round(-2*res_mnl$value + log(hhpt)*length(res_mnl$par), 3)   #MNLモデルのBIC
 
