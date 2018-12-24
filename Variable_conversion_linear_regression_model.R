@@ -97,27 +97,33 @@ mvdnorm <- function(y, mu, Cov, N, s){
 ##変数変換により線形回帰を推定
 #データの変換
 y_log <- log(y)   
+y_sq <- sqrt(y)
 
 #回帰行列を推定
 beta1 <- solve(t(x) %*% x) %*% t(x) %*% y
 beta2 <- solve(t(x) %*% x) %*% t(x) %*% y_log
+beta3 <- solve(t(x) %*% x) %*% t(x) %*% y_sq
 
 #分散共分散行列を推定
-er1 <- y - x %*% beta1
-er2 <- y_log - x %*% beta2
+er1 <- y - x %*% beta1; er2 <- y_log - x %*% beta2; er3 <- y_sq - x %*% beta3
 Cov1 <- t(er1) %*% er1 / hh
 Cov2 <- t(er2) %*% er2 / hh
+Cov3 <- t(er3) %*% er3 / hh
 
 ##AICを計算
 #対数尤度を計算
-mu1 <- x %*% beta1
-mu2 <- x %*% beta2
+mu1 <- x %*% beta1; mu2 <- x %*% beta2; mu3 <- x %*% beta3
 LL1 <- sum(log(mvdnorm(y, mu1, Cov1, hh, k)))
-LL2 <- sum(log(mvdnorm(log(y), mu2, Cov2, hh, k)))
+LL2 <- sum(log(mvdnorm(y_log, mu2, Cov2, hh, k)))
+LL3 <- sum(log(mvdnorm(y_sq, mu3, Cov3, hh, k)))
 
-#ヤコビアンを設定
-D(expression(log(y)), "y")   #変数変換の微分
-jacobi_fixed <- sum(log(rowProds(1/y)))   #ヤコビアンの補正項
+#ヤコビアンの補正項設定
+D(expression(log(y)), "y"); D(expression(sqrt(y)), "y")   #変数変換の微分
+log_jacobi <- sum(log(rowProds(1/y)))   
+sq_jacobi <- sum(log(rowProds(1/2*y^(-1/2))))
+
+#AICの計算
+par <- k*column + k + (k*(k-1))/2
 print(aic1 <- -2*LL1 + 2*(par+1))
-print(aic2 <- -2*(LL2 + jacobi_fixed) + 2*(par+1))
-
+print(aic2 <- -2*(LL2 + log_jacobi) + 2*(par+1))
+print(aic3 <- -2*(LL3 + sq_jacobi) + 2*(par+1))
