@@ -1,0 +1,268 @@
+---
+pdf_document: default
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+date: "2018-01-30"
+title: "イベント効果測定調査"
+---
+
+### 1. 概要
+サービスAのユーザーを対象に、アイテム販売促進のために5/1～5/2の2日間イベントを実施し、  
+サービス利用頻度によってイベントの効果に差があるかが知りたいから、4月の1か月間のサービス利用日数で3つのグループに分けて、  
+5/1～5/8までのイベントに参加したユーザーとしなかったユーザーのアイテム購買数と購買確率を集計することで、  
+サービス利用頻度によりイベントによる購買に差があるのかを確かめる。
+  
+##### **グループの分け方は以下の通り**
+* 10日以内 → ログイン日数が10日以内のユーザー
+* 11日～20日 → ログイン日数が11日～20日のユーザー
+* 20日以上  → ログイン日数21日以上のユーザー
+  
+  
+### 2. 結果の要約
+サービス利用頻度で分けない場合、**イベントに参加しなかった方**がユーザーが有意にアイテムを購買する確率が高い。  
+しかし、サービス利用頻度ごとに分けると、上記の効果はなくなり、イベント参加有無でアイテム購買確率に差はなくなった。  
+このようなことが起こった理由として、サービス利用頻度ごとにグループ分けすると、イベント参加確率とアイテム購買確率に差があり、  
+**アイテム購買確率が低いグループのイベント参加率が高く、アイテム購買確率が高いグループのイベント参加率が低かったためであった。**  
+このような状況を避けるために、効果を検証する際にはできるだけABテストを実行すべきだろう。
+  
+  
+```{r include=FALSE}
+# コードは表示しない
+##ライブラリの読み込み
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(stringr)
+library(rmarkdown)
+library(knitr)
+`%!in%` <- function(a,b) ! a %in% b
+```
+
+```{r include=FALSE}
+# コードは表示しない
+####データの前処理####
+##データの読み込み
+user_login0 <- read.csv("D:/Statistics/dat/DS_Test/user_login.csv", header=TRUE, stringsAsFactors=FALSE)
+event_entry_users0 <- read.csv("D:/Statistics/dat/DS_Test/event_entry_users.csv", header=TRUE, stringsAsFactors=FALSE)
+item_purchase_log0 <- read.csv("D:/Statistics/dat/DS_Test/item_purchase_log.csv", header=TRUE, stringsAsFactors=FALSE)
+
+##ユーザーをログイン日数ごとに分ける
+#ユーザーをログイン日でユニークにする
+user_login0$timestamp <- as.Date(user_login0$timestamp)
+unique_user <- unique(user_login0[str_sub(user_login0$timestamp, 1, 7)=="2016-04", ])   #2016年4月のデータのみ抽出
+login_count <- plyr::count(unique_user$user_id)   #ログイン日数を数える
+login_count$x <- as.character(login_count$x)
+```
+  
+### 3. ログイン日数とイベント参加ユーザーを集計
+#### **4月のユーザーのログイン日数の分布**
+ユーザーごとのログイン日数は一様に分布している。
+```{r, echo=FALSE}
+hist(login_count$freq, col="grey", xlab="ログイン日数", main="ユーザーごとの4月のログイン日数")   #一様乱数
+```
+  
+  
+```{r include=FALSE}
+# コードは表示しない
+#ユーザーを指定したグループに分ける
+group1 <- login_count[login_count$freq <= 10, ]   #ログイン日数10日以内
+group2 <- login_count[login_count$freq >= 11 & login_count$freq <= 20, ]   #ログイン日数11日～20日以内
+group3 <- login_count[login_count$freq >= 21, ]   #ログイン日数21日以上
+group <- list(group1, group2, group3)
+group_name <- c("10日以内", "11～20日", "20日以上")
+names(group) <- group_name
+g <- length(group)
+
+##イベントに参加したユーザーを特定
+#イベント参加人数と参加確率
+event_entry_user1 <- user1 <- list()
+n1 <- N <- rep(0, g)
+for(i in 1:g){
+  event_entry_user1[[i]] <- event_entry_users0[event_entry_users0$user_id %in% group[[i]]$x, ]
+  user1[[i]] <- unique(event_entry_user1[[i]]$user_id)
+  n1[i] <- length(user1[[i]]); N[[i]] <- length(group[[i]]$x)   
+}
+dt1 <- data.frame("ログインユーザー数"=c(sum(N), N), "イベント参加人数"=c(sum(n1), n1), 
+                  "イベント参加率"=round(c(sum(n1)/sum(N), n1/N), 3))
+rownames(dt1) <- c("全体", group_name)
+```
+  
+  
+#### **サービス利用頻度のグループごとのイベント人数とイベント参加率**
+イベント参加率およびイベント参加人数はサービス利用頻度が高いほど、高くなる傾向。  
+10日以内のユーザーと20日以上のユーザーではイベント参加人数に1,500人ほどの差があり、  
+**もし両者でアイテム購買確率が異なれば、全体で見たときにアイテム購買におけるイベント効果を見誤る可能性がある。**
+```{r, echo=FALSE}
+kable(dt1)
+```
+  
+  
+```{r include=FALSE}
+##イベントに参加していないユーザーを特定
+user0 <- list()
+n0 <- rep(0, g)
+for(i in 1:g){
+  user0[[i]] <- group[[i]]$x[group[[i]]$x %!in% user1[[i]]]
+  n0[i] <- length(user0[[i]])
+}
+
+
+####グループ間でイベント効果に差があるかを分析####
+##アイテム購買数を集計
+#全体でのアイテム購買数
+target_date <- seq(as.Date("2016-05-01"), as.Date("2016-05-08"), by="days")
+item_purchase_log <- item_purchase_log0[as.Date(item_purchase_log0$timestamp) %in% target_date, ]
+```
+  
+  
+### 4. アイテム購買数の実数から分布を確認
+#### **全体でのアイテム購買数の推移**
+5月9日以降、アイテム購買数は急激に減少。
+```{r, echo=FALSE}
+plot(table(as.Date(item_purchase_log0$timestamp)), type="o", main="全体でのアイテム購買数の推移", ylab="アイテム購買数",
+     lwd=2.0)
+```
+
+```{r include=FALSE}
+##参加参加有無別のユーザーのグループごとのアイテムの購買数
+#イベント参加ユーザーの集計
+min_date <- min(as.Date(item_purchase_log0$timestamp)); max_date <- max(as.Date(item_purchase_log0$timestamp))
+purchase_item1 <- list()
+x1 <- c()
+for(i in 1:g){
+  purchase_item1[[i]] <- item_purchase_log0[item_purchase_log0$user_id %in% user1[[i]], ]
+  x1 <- rbind(x1, table(c(as.Date(purchase_item1[[i]]$timestamp), seq(min_date, max_date, by="days"))) - 1)
+}
+
+#イベント不参加ユーザーの集計
+purchase_item0 <- list()
+x0 <- c()
+for(i in 1:g){
+  purchase_item0[[i]] <- item_purchase_log0[item_purchase_log0$user_id %in% user0[[i]], ]
+  x0 <- rbind(x0, table(c(as.Date(purchase_item0[[i]]$timestamp), seq(min_date, max_date, by="days"))) - 1)
+}
+``` 
+  
+#### **イベント参加有無でのアイテム購買数の推移**
+イベント参加者、イベント不参加者ともに似たような推移になっている。
+あえて言えば、イベント開始日の5月1日と5月8日が両者で異なる動き。
+```{r, echo=FALSE}
+#イベント参加者全体でのアイテム購買数をプロット
+days <- as.Date(names(colSums(x1)))
+plot(days, colSums(x1), type="o", lty=1, col="black", lwd=1, xaxt="n",
+     main="イベント参加者の全体でのアイテム購買数の推移", xlab="日付", ylab="アイテム購買数")
+axis.Date(1,at=seq(min(days), max(days), "days"),format="%m月%d日")
+plot(as.Date(names(colSums(x0))), colSums(x0), type="o", lty=1, col="black", lwd=1, xaxt="n",
+     main="イベント不参加者の全体でのアイテム購買数の推移", xlab="日付", ylab="アイテム購買数")
+axis.Date(1,at=seq(min(days), max(days), "days"),format="%m月%d日")
+```
+  
+#### **イベント参加有無 + グループでのアイテム購買数の推移**
+イベント参加有無にかかわらず、グループ間で似たような推移になっている。  
+**イベント中(5月1日、5月2日)とそれ以降(5月3日～5月8日)に傾向の違いは見られないので、日付は無視して集計を行う。**
+```{r, echo=FALSE}
+#グループごとのアイテム購買数をプロット
+plot(days, x1[1, ], type="o", lty=1, col=1, main="イベント参加者のグループごとのアイテム購買数の推移",
+     xlab="日付", ylab="アイテム購買数", lwd=1.0, ylim=c(0, max(x1)), xaxt="n")
+for(i in 2:g){
+  lines(days, x1[i, ], type="o", lty=i, col=i, main="", xlab="", ylab="",
+        lwd=1.0, ylim=c(0, max(x1)), xaxt="n")
+}
+axis.Date(1,at=seq(min(days), max(days), "days"),format="%m月%d日")
+legend("topright", legend=group_name, col=1:g, lty=1:g, lwd=2, cex=0.7)
+
+plot(days, x0[1, ], type="o", lty=1, col=1, main="イベント不参加者のグループごとのアイテム購買数の推移",
+     xlab="日付", ylab="アイテム購買数", lwd=1.0, ylim=c(0, max(x0)), xaxt="n")
+for(i in 2:g){
+  lines(days, x0[i, ], type="o", lty=i, col=i, main="", xlab="", ylab="",
+        lwd=1.0, ylim=c(0, max(x0)), xaxt="n")
+}
+axis.Date(1,at=seq(min(days), max(days), "days"),format="%m月%d日")
+legend("topright", legend=group_name, col=1:g, lty=1:g, lwd=2, cex=0.7)
+```
+  
+```{r include=FALSE}
+##アイテムを購買したユーザー数を集計
+#イベント参加有無およびグループごとのアイテムの購買数
+purchase_user0 <- purchase_user1 <- list()
+y0 <- y1 <- rep(0, g)
+for(i in 1:g){
+  purchase_user0[[i]] <- unique(item_purchase_log[item_purchase_log$user_id %in% user0[[i]], "user_id"])
+  purchase_user1[[i]] <- unique(item_purchase_log[item_purchase_log$user_id %in% user1[[i]], "user_id"])
+  y0[i] <- length(purchase_user0[[i]])
+  y1[i] <- length(purchase_user1[[i]])
+}
+
+#イベントに参加有無別のアイテムを購買したユーザーの割合
+x <- as.numeric(t(matrix(c(sum(x1), rowSums(x1), sum(x0), rowSums(x0)), nrow=g+1)))
+y <- as.numeric(t(matrix(c(sum(y1), y1, sum(y0), y0), nrow=g+1)))
+n <- as.numeric(t(matrix(c(sum(n1), n1, sum(n0), n0), nrow=g+1)))
+y_rate <- y / n
+
+#データフレームを作成
+dt2 <- data.frame(rep(c("全体", group_name), rep(2, g+1)), rep(c("参加", "不参加"), g+1), n, x, y, round(y_rate, 3), 
+                  stringsAsFactors=FALSE)
+rownames(dt2) <- paste(rep(c("全体", group_name), rep(2, g+1)), rep(c("参加", "不参加"), g+1), sep=" - ")
+colnames(dt2) <- c("グループ", "イベント参加有無", "ユーザー数", "アイテム購買数", "アイテム購買人数", "アイテム購買確率")
+```
+  
+  
+### 5. ユーザーのアイテム購買確率を集計
+イベント効果として、ユーザーのうち何％がアイテムを購買したかの確率を採用した。  
+※1人のユーザーのアイテム購買数の最大は2アイテムだったので、1人のユーザーがイベント効果に影響を及ぼすことはないことを確認済み。
+  
+#### **サービス利用頻度のグループごとのイベント人数とイベント参加率(再掲)**
+```{r, echo=FALSE}
+kable(dt1)
+```
+  
+  
+#### **イベント参加有無 + グループでのアイテム購買確率**
+全体ではイベント参加有無でアイテム購買確率に差があり、イベント不参加のユーザーのアイテム購買確率は高い。    
+しかし、グループごとに見ると、イベント参加有無で両者の差はなくなる。  
+これは、**アイテム購買確率の低いグループほどイベント参加率が高かったため、イベントに参加したユーザー層には**  
+**イベントに参加していないユーザー層と比較して、アイテム購買確率が低いユーザーばかりが集まってしまった**ため、    
+このような結果になった。(**シンプソンのパラドックス**)
+```{r, echo=FALSE}
+kable(dt2)
+```
+  
+  
+#### **アイテム購買確率を可視化**
+※グラフ中の|-|は95％信頼区間を表す。
+```{r, echo=FALSE}
+value <- t(matrix(dt2$"アイテム購買確率", nrow=g+1, ncol=2, byrow=T))
+rownames(value) <- c("参加", "不参加")
+colnames(value) <- c("全体", group_name)
+error <- sqrt(dt2$"アイテム購買確率"*(1-dt2$"アイテム購買確率")/dt2$"ユーザー数")   #標準誤差
+interval1 <- qnorm(0.975, 0, error); interval2 <- qnorm(0.025, 0, error)   #95％信頼区間
+
+b <- barplot(value, beside=TRUE, legend=TRUE, xlab="4月のログイン日数", ylab="アイテム購買確率", 
+             ylim=c(0, max(dt2$"アイテム購買確率") + 0.05), main="イベント参加有無ごとのユーザーのアイテム購買確率")
+arrows(b, dt2$"アイテム購買確率" + interval1, b, dt2$"アイテム購買確率", code=3, angle=90, length=0.1)
+arrows(b, dt2$"アイテム購買確率" + interval2, b, dt2$"アイテム購買確率", code=3, angle=90, length=0.1)
+```
+  
+#### **グループごとにイベント参加有無でのアイテム購買確率に差があるかを検定**
+グループごとに分けた場合、イベント参加有無でアイテム購買確率に有意な差はなかった。
+```{r include=FALSE}
+result <- list()
+p_value <- diff <- rep(0, g+1)
+for(i in 1:(g+1)){
+  index <- which(dt2$"グループ"==c("全体", group_name)[i])
+  a1 <- dt2$"アイテム購買人数"[index]
+  a2 <- dt2$"ユーザー数"[index]
+  result[[i]] <- prop.test(a1, a2)
+  p_value[i] <- result[[i]][[3]]
+  diff[i] <- (a1/a2)[1] - (a1/a2)[2]
+}
+names(result) <- c("全体", group_name)
+dt3 <- data.frame("グループ"=c("全体", group_name), "購買確率の差"=round(diff, 3), "p値"=round(p_value, 5))
+```
+  
+```{r, echo=FALSE}
+kable(dt3)
+```
+
