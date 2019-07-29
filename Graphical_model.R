@@ -3,37 +3,36 @@ library(DiagrammeR)
 
 ## LDAのグラフィカルモデル
 grViz("
-      digraph dot {
+      digraph flow {
       graph [splines = line,compound = true, nodesep = .5, ranksep = .25, color = black, rankdir=LR]
       node [shape = circle,style = filled,fillcolor = white,color = black,label = '&alpha;'] alpha
       node [label = '&theta;@_{d}'] theta
-      node [label = '&beta;'] beta
       node [label = '&phi;@_{k}'] phi
+      node [label = '&beta;'] beta
       node [label = 'z@_{dn}'] z
-      node [fillcolor = grey,label = 'w@_{dn}'] w
+      node [fillcolor = grey,label = 'w@_{dn}'] word
+      
       subgraph cluster1 {
-      labelloc=b
-      label = 'D = 1...d'
-      edge [color = black]
-      theta -> z
-      subgraph cluster2 {
-      labelloc=b
-      label = 'n@_{d} = 1...N'
-      edge [color = black]
-      z -> w
-      }
+        labelloc=b
+        label = 'D = 1...d'
+        edge [color = black]
+        theta -> z
+        subgraph cluster2 {
+          labelloc=b
+          label = 'n@_{d} = 1...N'
+          edge [color = black]
+          z -> word
+        }
       }
       subgraph cluster3 {
-      labelloc=b
-      label = 'k = 1...K'
-      edge [color = black]
-      phi
+        labelloc=b
+        label = 'k = 1...K'
+        edge [color = black]
+        phi
       }
-      
       edge [color = black]
       alpha -> theta
-      beta -> phi -> w
-      {rank = same; beta; w}
+      beta -> phi -> word
       }",engine = "dot")
 
 
@@ -48,7 +47,7 @@ grViz("
         node [label = '&beta;@_{f}'] beta
         node [label = '&phi;@_{kf}@^{floor}'] phi
         node [label = 'z@_{dn}'] z
-        node [fillcolor = grey,label = 'w@_{dn}'] w
+        node [fillcolor = grey,label = 'w@_{dn}'] word
         subgraph cluster1 {
           labelloc=b
           label = 'D = 1...d'
@@ -65,8 +64,8 @@ grViz("
               labelloc=b
               label = 'n@_{d} = 1...N'
               edge [color = black]
-              theta2 -> z -> w
-              {rank = same; theta2; z; w}
+              theta2 -> z -> word
+              {rank = same; theta2; z; word}
           }
         }
         subgraph cluster4 {
@@ -78,9 +77,7 @@ grViz("
         
         edge [color = black]
         alpha1 -> theta1
-        beta -> phi -> w
-        {rank = same; beta; w}
-      
+        beta -> phi -> word
       }",engine = "dot")
 
 
@@ -90,7 +87,6 @@ grViz("
         graph [splines = line,compound = true, nodesep = .5, ranksep = .25, color = black, rankdir=TB, newrank=true]
         node [label = 'v2'] v2
         node [label = 'v1'] v1
-        
         node [label = 'r@_{d}'] r
         node [label = '&alpha;@_{dt}'] alpha2
         node [label = '&theta;@_{d}'] theta1
